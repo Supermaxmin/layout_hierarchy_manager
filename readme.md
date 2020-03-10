@@ -17,7 +17,7 @@ python -m unittest test.ArrayManagerTest.testSArrayManager  # test one method
 ## test result
 
 ###ArrayManager test results
-Hierarchies of **testcase1.gds**, **testcase2.gds** are restored and the corresponding file is located in *./layout/out/arrays*.  ![root_instance](https://github.com/Supermaxmin/layout_hierarchy_manager/tree/master/test_results/root_instance.png)
+Hierarchies of **testcase1.gds**, **testcase2.gds** are restored and the corresponding file is located in *./layout/out/arrays*.  ![image](https://github.com/Supermaxmin/layout_hierarchy_manager/tree/master/test_results/root_instance.png)
 
 <font color=red>NOTE: Remember to replace the testcase with yours.</font>
 
