@@ -280,7 +280,6 @@ class SortedLinkedList(object):
 				node = node.next
 				if node.next is None:
 					return None, None
-
 			rtree.insert(1, (x, nodeF.value, x+w, nodeF.value+h))
 			self.pop(nodeF)
 

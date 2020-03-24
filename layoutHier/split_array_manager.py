@@ -141,12 +141,14 @@ class SArray(object):
 		@param regionM: db.Box object."""
 		numX, numY = 0, 10e5
 		x0, y0 = pr1
-		xMax = x0 + regionM.width()# + self.leap[0]
+		xMax = x0 + regionM.width() + self.leap[0]
 		x = x0
 		while x < xMax:
 			if x in self.rbtree and self.rbtree[x].tail:
-				tail = self.rbtree[x].tail.value
-				tempy = int((tail - y0)/self.leap[1]) + 1
+				tail = self.rbtree[x].at(y0)
+				while tail.next:
+					tail = tail.next
+				tempy = int((tail.value - y0)/self.leap[1]) + 1
 				numY = min(numY, tempy)
 				numX += 1
 				x = x + self.leap[0]
@@ -511,6 +513,7 @@ class SArrayManager(object):
 
 		# ensure only the lowest level arrays are captured
 		self.__noise_simple_array_filter()
+		self.arrayList.sort(key=lambda x: (x.anchorCell.left, x.anchorCell.bottom))
 
 	def mosaic_array_form(self, array1, array2, arrayList):
 		"""Derive mosaic arrays from overlapping simple arrays. @Param array1 is
@@ -654,7 +657,15 @@ class SArrayManager(object):
 		for array in mosaicArrayList:
 			box = array.region.bbox()
 			regionA = (box.left, box.bottom, box.right, box.top)
-			noises = list(self.noise_cells.intersection(regionA))
+			touches = [i.bbox for i in self.noise_cells.intersection(regionA, True)]
+			noises = False
+			for n in touches:
+				boxn = db.Box(int(n[0]), int(n[1]), int(n[2]), int(n[3]))
+				if boxn.width() >= box.width() or boxn.height() >= box.height():
+					continue
+				if boxn.overlaps(box):
+					noises = True
+					break
 			if not noises:
 				finals.extend(array.decompose(self.noise_cells))
 		self.arrayList = finals

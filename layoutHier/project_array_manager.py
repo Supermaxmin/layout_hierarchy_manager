@@ -269,7 +269,7 @@ class PArrayManager(object):
 			if patternLib.patternCount < 1:
 				keep.append(array)
 
-		self.arrayList.append(array)
+		self.arrayList = keep
 
 	def array_check_exp(self):
 		"""Check elements in array group by group to make sure they are the
@@ -348,7 +348,7 @@ class PArrayManager(object):
 			if patternLib.patternCount == 1:
 				keep.append(array)
 
-		self.arrayList.append(array)
+		self.arrayList = keep
 
 	def element_determine(self):
 		"""Element directly derived from projective feature periods might
@@ -541,5 +541,5 @@ class PArrayManager(object):
 			left, bottom = array.bbox.left, array.bbox.bottom
 			element = db.Box(left, bottom, left+array.periodX, bottom+array.periodY)
 			regions.extend([array.bbox, element])
-			
+
 		return regions

@@ -104,7 +104,6 @@ class ProjectiveFeature(object):
 			if mode == 'single':
 				self.segmentsX = ProjectiveFeature._period_find_multiscale(
 					self.featureX, self.THRESH)
-				#ipdb.set_trace()
 			elif mode == 'multiple':
 				self.segmentsX = ProjectiveFeature._period_find_multiple(
 					self.featureX, self.THRESH)

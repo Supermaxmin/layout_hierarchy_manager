@@ -162,7 +162,7 @@ def inst_enlarge(bbox, instList, rtree, incremental=False):
 	@param instList  the list containing element instances.
 	@param rtree  all basic element index are stored in a rtree.
 	"""
-	workingLen = 1000
+	workingLen = 200
 
 	flagLeft, flagBottom, flagRight, flagTop = False, False, False, False
 	stringList, boxList = [], []
@@ -174,9 +174,9 @@ def inst_enlarge(bbox, instList, rtree, incremental=False):
 	#left direction
 	aimRegion = (instLeft - workingLen, instBottom, instLeft-1, instTop)
 	leftBar = (instLeft-1, instBottom, instLeft-1, instTop)
-	flagLeft, nearestLeft = nearest_element(rtree, instList, aimRegion, leftBar)         #obtain the nearest element
+	flagLeft, nearestLeft = nearest_element(rtree, instList, aimRegion, leftBar)  #obtain the nearest element
 	if flagLeft:
-		bboxSeed = db.Box(bbox.left, bbox.bottom, bbox.right, bbox.top) + nearestLeft.bbox                                  #merge box to get original box
+		bboxSeed = db.Box(bbox.left, bbox.bottom, bbox.right, bbox.top) + nearestLeft.bbox #merge box to get original box
 		bboxStable1, inst1 = box_expand(bboxSeed, instList, rtree)              #expand the seed to get new stale inst without cutting
 		if incremental:
 			for idx in formerList:
