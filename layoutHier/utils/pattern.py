@@ -31,7 +31,7 @@ class ProjectiveFeature(object):
 	gons' number) for multi-patterns in a region. They both reflect the distribu-
 	tion along x/y direction."""
 
-	def __init__(self, fx=None, fy=None, segmentsX=None, segmentsY=None, threshold=5):
+	def __init__(self, fx=None, fy=None, segmentsX=None, segmentsY=None, threshold=4):
 		"""x,y projective feature and the threshold for Array finding. """
 		self.featureX = fx
 		self.featureY = fy
@@ -41,7 +41,7 @@ class ProjectiveFeature(object):
 
 	@property
 	def feature(self):
-		return (self.featureX, self.featurY)
+		return (self.featureX, self.featureY)
 
 	@feature.setter
 	def feature(self, f):
@@ -184,44 +184,30 @@ class ProjectiveFeature(object):
 		MAX_PERIOD = 100     # max gap numbers for a period
 		KEYLEN = 7
 		LAST = len(feature)
-		# intialize
+		if LAST < 14:
+			KEYLEN = 3
 		# dots like (distance between 2 projections, polygon id, polygon's num)
 		dotQueue = [(0,0,0) for i in range(MAX_PERIOD)]
-		keyDict, segments = {}, []
+		keyDict, segments, dots = {}, [], []
 		ruler, start, Match = 0, 0, False
-		if len(feature) < KEYLEN:
-			return segments
-		base = feature[0:KEYLEN]
-		for i in range(KEYLEN-1):
-			dotQueue[i] = (feature[KEYLEN-1-i][0]-feature[KEYLEN-2-i][0], feature[KEYLEN-2-i][1], feature[KEYLEN-2-i][2])
+		for i in range(LAST-1):
+			dots.append((feature[i+1][0]-feature[i][0], feature[i][1], feature[i][2]))
 
-		for i, next in enumerate(feature[KEYLEN:]):
-			dot = (next[0]-base[KEYLEN-1][0], base[KEYLEN-1][1], base[KEYLEN-1][2])
-			base = base[1:KEYLEN] + [next]
+		for i, dot in enumerate(dots):
 			dotQueue = [dot] + dotQueue[:MAX_PERIOD-1]
 
 			if Match:
 				assert ruler > 0, "Ruler {} should be greater than 0.".format(ruler)
 
-				# exception for last one
-				if dot != dotQueue[ruler] or i == LAST-KEYLEN-1:
+				if dot != dotQueue[ruler] or i == LAST-2:	# exception for last one
 					# record periodic segments
-					whole = i - start + 1
-					nw = math.floor(whole/ruler)
-					if start+ruler*nw -1 < LAST:
-						numWhole = nw
-					else:
-						numWhole = nw - 1
-					# print('start:{}, numWhole:{}, ruler{}'.format(start, numWhole, ruler))
 					period = feature[start+ruler][0] - feature[start][0]
-					##包围盒不准确，待后续调整
-					small, big = feature[start][0], feature[start+ruler*numWhole-1][0]
+					small = feature[start][0]
+					big = feature[i+1][0] if i == LAST-2 else feature[i][0]
+					numWhole = math.ceil((big-small)/period)
 					# go back to search mode
 					ruler, start, Match = 0, 0, False
 					dotQueue = [(0,0,0) for i in range(MAX_PERIOD)]
-					keyDict = {}
-					if numWhole < THRESH:
-						continue
 					segments.append((small, big, period, numWhole))
 				else:
 					continue
@@ -231,14 +217,24 @@ class ProjectiveFeature(object):
 					# switch into match mode
 					start = keyDict[key]
 					ruler = i - start
-					Match = True
+					start -= KEYLEN-1
+					forward = i + ruler
+					if forward < LAST-1 and dots[forward] != dots[i]:
+						keyDict[key] = i
+						key0 = tuple(dotQueue[MAX_PERIOD-1:MAX_PERIOD-KEYLEN-1:-1])
+						if key0 in keyDict:
+							keyDict.pop(key0)
+					else:
+						keyDict.clear()
+						Match = True
 				else:
 					# keep searching
 					keyDict[key] = i
 					key0 = tuple(dotQueue[MAX_PERIOD-1:MAX_PERIOD-KEYLEN-1:-1])
 					if key0 in keyDict:
 						keyDict.pop(key0)
-		segments.sort(key=lambda x: x[1]-x[0], reverse=True )
+		segments.sort(key=lambda x: x[0])
+
 		return segments
 
 
@@ -396,7 +392,6 @@ class PolygonLib(object):
 			pattern = PolygonPattern(pid, symmetryType, tidCodeList, [inst])
 			for i in range(len(tidCodeList)):
 				x = tidCodeList[i]
-				# from ipdb import set_trace;set_trace()
 				self.codeDict[ tuple(x) ] = [pid, TID(i+1)]     # update code dictionary
 			self.patternList.append(pattern)                    # update pattern list
 
@@ -715,6 +710,7 @@ class PatternLib(object):
 				x = tidCodeList[i]
 				self.codeDict[ tuple(x) ] = [pid, TID(i+1)]     #update code dictionary
 			self.patternList.append(pattern)                    #update pattern list
+
 		return inst
 
 	def any_same(self, pattern):

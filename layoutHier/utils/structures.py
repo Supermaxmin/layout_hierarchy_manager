@@ -260,7 +260,7 @@ class SortedLinkedList(object):
 		self.__head = None
 		self.__tail = None
 
-	def period_find(self, rtree, size, Threshold=30):
+	def period_find(self, rtree, size, Threshold=15):
 		"""@return: starting node and period"""
 		x , w, h = size
 		while self.__size > 2:

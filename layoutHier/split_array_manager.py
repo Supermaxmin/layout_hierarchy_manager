@@ -13,7 +13,7 @@
 			  cropping and projecting.
 """
 
-import math
+import math, time
 
 import klayout.db as db
 from bintrees import FastRBTree
@@ -146,6 +146,8 @@ class SArray(object):
 		while x < xMax:
 			if x in self.rbtree and self.rbtree[x].tail:
 				tail = self.rbtree[x].at(y0)
+				if not tail:
+					break
 				while tail.next:
 					tail = tail.next
 				tempy = int((tail.value - y0)/self.leap[1]) + 1
@@ -170,11 +172,9 @@ class SArray(object):
 			if self.rbtree[x].size == numY:
 				self.rbtree.pop(x)
 			else:
-				try:
-					self.rbtree[x].pop_values([pRef[1]+i*self.leap[1] for i in range(numY)])
+				self.rbtree[x].pop_values([pRef[1]+i*self.leap[1] for i in range(numY)])
 				# self.rbtree[x].pop_segment(pRef[1], pRef[1]+(numY-1)*self.leap[1])
-				except:
-					import ipdb; ipdb.set_trace()
+
 		# adjust region
 		if self.rbtree.is_empty():
 			self.region = db.Polygon()
@@ -260,10 +260,13 @@ class SArrayManager(object):
 		polyTrees = {}
 		polygonLib = PolygonLib([], {}, 0, type='polygon')
 		# encode polygons of the layout
+		end = time.time()
 		try:
 			topCell = layout.top_cell()
 			topCell.flatten(-1, False)
 			boxWhole = topCell.bbox()
+			print("Flatten time is {}".format(time.time()-end))
+			end = time.time()
 		except:
 			print('Layout has nultiple top cell.')
 		if merge:
@@ -271,6 +274,8 @@ class SArrayManager(object):
 			topRegion.merge(layer)
 			topRegion.merged_semantics=0
 			iterator = topRegion.each_merged()
+			print("Merge time is {}".format(time.time()-end))
+			end = time.time()
 		else:
 			iterator = topCell.each_shape(layer)
 		for i, shape in enumerate(iterator):
@@ -281,6 +286,9 @@ class SArrayManager(object):
 				polygon = shape.polygon
 			vertexes = [(point.x, point.y) for point in polygon.each_point_hull()]
 			polygonLib.encode(box, vertexes)
+
+		print("Encode time is {}".format(time.time()-end))
+		print("Polygon count is {}, Layout area is {}".format(i+1, boxWhole.area()))
 
 		# produce red black trees from polygon patterns
 		# rbtree's node--(linked list, corresponding dict)
@@ -309,7 +317,7 @@ class SArrayManager(object):
 		return cls([], polyTrees)
 
 	@staticmethod
-	def __leapx_find(tree, xa, ya, Threshold=30):
+	def __leapx_find(tree, xa, ya, Threshold=10):
 		prex, count = xa, 1
 		first, jumpFirst = 0, 0
 		for x in tree.keys():
@@ -411,12 +419,14 @@ class SArrayManager(object):
 
 	def visualize(self):
 		"""Output the bounding box of the mosaic arrays for visualization."""
-		boxList = []
+		boxList, area = [], 0
 		for array in self.arrayList:
+			area += array.region.area()
 			contour = array.region
 			anchorCell = array.anchorCell
 			boxList.extend([contour, anchorCell])
 
+		print("Array area is {}, array count is {}.".format(area, len(self.arrayList)))
 		return boxList
 
 	@staticmethod
@@ -590,14 +600,19 @@ class SArrayManager(object):
 						array2.noise_cells_remove(self.noise_cells, regionM)
 						continue
 					# subArray and template
-					subBox1 = array1.subArray_bbox(seed1)
-					subBox2 = array2.subArray_bbox(seed2)
-					anchorCell = subBox1 + subBox2
-					left, bott = anchorCell.left, anchorCell.bottom
-					template = array1.template.merge(seed1, array2.template, seed2, (left, bott))
-					mosaicArrayList.append(SArray.create(template, anchorCell, leapM, dim))
-					array1.modify(pr1, dimSub1, dim)	# exclude region from the former arrays
-					array2.modify(pr2, dimSub2, dim)
+					try:	# exclude region from the former arrays
+						array1.modify(pr1, dimSub1, dim)
+						array2.modify(pr2, dimSub2, dim)
+						subBox1 = array1.subArray_bbox(seed1)
+						subBox2 = array2.subArray_bbox(seed2)
+						anchorCell = subBox1 + subBox2
+						left, bott = anchorCell.left, anchorCell.bottom
+						template = array1.template.merge(seed1, array2.template, seed2, (left, bott))
+						mosaicArrayList.append(SArray.create(template, anchorCell, leapM, dim))
+					except:
+						array1.noise_cells_remove(self.noise_cells, regionM)
+						array2.noise_cells_remove(self.noise_cells, regionM)
+
 				# check remaining array
 				if array2.region.is_box():
 					box = array2.region.bbox()

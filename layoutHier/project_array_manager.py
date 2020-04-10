@@ -20,6 +20,7 @@ from rtree import index
 import klayout.db as db
 
 from layoutHier.utils.pattern import *
+from layoutHier.utils.helpers import box_merge
 
 __all__ = ["PArray", "PArrayManager"]
 
@@ -45,13 +46,22 @@ class PArray(object):
 		box = db.Box(segmentx[0], segmenty[0], segmentx[1], segmenty[1])
 		return cls(box, segmentx[2], segmenty[2], element)
 
+	@property
 	def shape(self):
 		numX = (self.bbox.right - self.bbox.left)/self.periodX
 		numY = (self.bbox.top - self.bbox.bottom)/self.periodY
 		return (int(numX), int(numY))
 
+	@property
 	def periods(self):
 		return(self.periodX, self.periodY)
+
+	@property
+	def coord_tuple(self):
+		"""Print the coordinate (left, bottom, right, top)."""
+		left, bottom = self.bbox.left, self.bbox.bottom
+		right, top = self.bbox.right, self.bbox.top
+		return (left, bottom, right, top)
 
 	def update(self, segment, axis='x'):
 		if axis == 'x':
@@ -61,23 +71,18 @@ class PArray(object):
 			self.bbox.bottom, self.bbox.top = segment[0], segment[1]
 			self.periodY = segment[2]
 
-	def coord_tuple(self):
-		"""Print the coordinate (left, bottom, right, top)."""
-		left, bottom = self.bbox.left, self.bbox.bottom
-		right, top = self.bbox.right, self.bbox.top
-		return (left, bottom, right, top)
-
 
 class PArrayManager(object):
 	"""ArrayManager managers all necessary pieces to derive regular arrays in
 	layout. Normally, array proposals derived from ProjectiveFeature. """
 
-	def __init__(self, arrayList=[], polygonList=None, polygonTree=None, box=None):
+	def __init__(self, arrayList=[], arrayProposals=[], polygonList=None,
+				polygonTree=None, box=None):
 		self.arrayList = arrayList
+		self.arrayProposals = arrayProposals
 		self.polygonList = polygonList
 		self.polygonTree = polygonTree
 		self.bbox = box
-		self.__is_overlapping = True
 
 	@classmethod
 	def layout_to_array_proposals(cls, layout, layer=0, merge=True):
@@ -85,6 +90,7 @@ class PArrayManager(object):
 		assert isinstance(layout, db.Layout)
 
 		polygonLib = PolygonLib([], {}, 0, type='polygon')
+		arrayProposals = []
 		arrayList = []
 		polygonList = []
 		polygonTree = index.Index()
@@ -118,7 +124,9 @@ class PArrayManager(object):
 			vertexes = [(point.x, point.y) for point in polygon.each_point_hull()]
 			polygonList.append(polygonLib.encode(box, vertexes))
 			polygonTree.insert(i, (box.left, box.bottom, box.right, box.top))
+
 		print("Encode time is {}".format(time.time()-end))
+		print("Polygon count is {}, area is {}".format(i, boxWhole.area()))
 
 		# produce array proposals from polygon pattern
 		for pattern in polygonLib.patternList:
@@ -126,112 +134,91 @@ class PArrayManager(object):
 			feature = pattern.feature
 			arrays = [PArray.segment_to_array(segmentx, segmenty) for segmentx in
 					  feature.segmentsX for segmenty in feature.segmentsY]
+			arrayProposals.append(arrays)
 			arrayList.extend(arrays)
 
-		arrayList.sort(key= lambda x: x.bbox.area(), reverse=True)
-		return cls(arrayList, polygonList, polygonTree, boxWhole)
+		arrayProposals.sort(key= lambda x: len(x), reverse=True)
+		return cls(arrayList, arrayProposals, polygonList, polygonTree, boxWhole)
 
-	def overlapping_resolve(self):
-		"""Resolve possible array overlappings, one 'genuine' array only
-		conresponds one array."""
+	def untouching(self, proposal):
+		"""Assert array proposals are valid or not according to touching principle."""
 
-		# remove proposals with untouched edges
-		touched = []
-		for proposal in self.arrayList:
-			px, py = proposal.periodX, proposal.periodY
-			l, b = proposal.bbox.left, proposal.bbox.bottom
-			touches = list(self.polygonTree.intersection((l, b, l+2*px, b)))
-			if not touches:
-				continue
-			touches = list(self.polygonTree.intersection((l, b, l, b+2*py)))
-			if not touches:
-				continue
-			r, t = proposal.bbox.right, proposal.bbox.top
-			touches = list(self.polygonTree.intersection((r-2*px, t, r, t)))
-			if not touches:
-				continue
-			touches = list(self.polygonTree.intersection((r, t-2*py, r, t)))
-			if not touches:
-				continue
-			touched.append(proposal)
-		self.arrayList = touched
-
-		# resolve overlapping
-		proposalTree = index.Index()
-		for i, proposal in enumerate(self.arrayList):
-			proposalTree.insert(i, proposal.coord_tuple())
-		keep, remove = [], {}
-		for i, proposal in enumerate(self.arrayList):
-			if i in remove:
-				continue
-			overlappings = proposalTree.intersection(proposal.coord_tuple())
-			for x in overlappings:
-				if x != i:
-					remove[x] = 0
-			keep.append(proposal)
-		self.arrayList = keep
-		self.__is_overlapping = False
+		px, py = proposal.periodX, proposal.periodY
+		l, b = proposal.bbox.left, proposal.bbox.bottom
+		touches = list(self.polygonTree.intersection((l, b, l+2*px, b)))
+		if not touches:
+			return True
+		touches = list(self.polygonTree.intersection((l, b, l, b+2*py)))
+		if not touches:
+			return True
+		r, t = proposal.bbox.right, proposal.bbox.top
+		touches = list(self.polygonTree.intersection((r-2*px, t, r, t)))
+		if not touches:
+			return True
+		touches = list(self.polygonTree.intersection((r, t-2*py, r, t)))
+		if not touches:
+			return True
+		return False
 
 	def proposals_to_arrays(self):
-		"""Begin with array proposals, scan regions of interest to
-		determine the exact bounding box and periods for corresponding regions."""
-		assert not self.__is_overlapping, 'Array proposals might overlap!'
+		"""Begin with array proposals, scan regions of interest to determine the
+		exact bounding box and periods for corresponding regions."""
 
-		# rtree for screenning obsolete
-		proposalTree = index.Index()
-		for i,proposal in enumerate(self.arrayList):
-			proposalTree.insert(i, proposal.coord_tuple())
+		realArrays, realIndex = [], index.Index()
+		for proposals in self.arrayProposals:
+			for proposal in proposals:
+				# remove untouching proposals
+				if self.untouching(proposal):
+					continue
+				overlappings = list(realIndex.intersection(proposal.coord_tuple))
+				if overlappings:	# remove any proposals overlapping with real arrays
+					continue
 
-		realArrays, obsoletes = [], {}
-		for i,proposal in enumerate(self.arrayList):
-			if i in obsoletes:
-				continue
-			# draw scanline, than project to obtain feature
-			left, bottom, right, top = proposal.coord_tuple()
-			periodx, periody = proposal.periodX, proposal.periodY
-			# project to x/y axis
-			sidex = PArrayManager._period_of_region(self, left, right, periodx, \
-				(bottom+top)/2, periody, axis='x')
-			sidey = PArrayManager._period_of_region(self, bottom, top, periody, \
-				(right+left)/2, periodx, axis='y')
-			if sidex is None or sidey is None:
-				continue
+				# draw scanline, than project to obtain feature
+				left, bottom, right, top = proposal.coord_tuple
+				periodx, periody = proposal.periodX, proposal.periodY
+				# project to x/y axis
+				sidex = PArrayManager._period_of_region(self, left, right, periodx, \
+					(bottom+top)/2, periody, axis='x')
+				sidey = PArrayManager._period_of_region(self, bottom, top, periody, \
+					(right+left)/2, periodx, axis='y')
+				if sidex is None or sidey is None:
+					continue
 
-			# updata array
-			proposal.bbox = db.Box(sidex[0], sidey[0], sidex[1], sidey[1])
-			proposal.periodX = sidex[2]
-			proposal.periody = sidey[2]
-			realArrays.append(proposal)
-			olds = proposalTree.intersection(proposal.coord_tuple())
-			for x in olds:
-				obsoletes[x] = x
+				# updata array
+				proposal.bbox = db.Box(sidex[0], sidey[0], sidex[1], sidey[1])
+				proposal.periodX = sidex[2]
+				proposal.periodY = sidey[2]
+				realArrays.append(proposal)
+				realIndex.insert(len(realArrays), proposal.coord_tuple)
+
 		self.arrayList = realArrays
-
-	def array_qualify(self):
-		"""Check weather arrays in array list are 'genuine' arrays which
-		means such arrays bear nothing except regular polygons."""
-		assert not self.__is_overlapping, 'Array proposals might overlap!'
-
-		raise NotImplementedError
 
 	def array_check_linear(self):
 		"""Check elements in array one by one to make sure they are the
 		same. Attentionally, boundary elements are treated different."""
 		keep = []
 		for array in self.arrayList:
-			sizex, sizey = array.shape()
+			sizex, sizey = array.shape
 			patternLib = PatternLib([], {}, 0)
+			area = array.periodX* array.periodY
 			# elements inside
 			elesInside = [(x,y) for x in range(1,sizex-1) for y in range(1,sizey-1)]
 			for x0, y0 in elesInside:
 				l = array.bbox.left + array.periodX*x0
 				b = array.bbox.bottom + array.periodY*y0
 				r, t = l+array.periodX, b + array.periodY
-				idx = self.polygonTree.intersection((l, b, r, t))
-				instString = []
+				idx = list(self.polygonTree.intersection((l, b, r, t)))
+				instString, ov = [], []
 				box = db.Box()
-				for i in idx:
-					inst = self.polygonList[i]
+				for id in idx:
+					inst = self.polygonList[id]
+					if inst.bbox.area() > area:
+						ov.append(id)
+				for id in ov:
+					idx.remove(id)
+				for i, id in enumerate(idx):
+					inst = self.polygonList[id]
 					if i == 0:
 						box = inst.bbox
 					else:
@@ -239,35 +226,56 @@ class PArrayManager(object):
 					c = inst.bbox.center()
 					instString.append((c.x, c.y, inst.pid, inst.tid, inst.symmetryType))
 				patternLib.encode(instString, box)
+
 			if patternLib.patternCount != 1:
 				continue
 
 			# boundary elements
-			leftBound = [(0, y) for y in range(sizey)]
+			patternLib = PatternLib([], {}, 0)
+			boundsX, boundsY = [], []
+			# leftBound = [(0, y) for y in range(sizey)]
 			rightBound = [(sizex-1, y) for y in range(sizey)]
-			bottomBound = [(x, 0) for x in range(sizex)]
+			# bottomBound = [(x, 0) for x in range(sizex)]
 			topBound = [(x, sizey-1) for x in range(sizex)]
-			elesBound = leftBound + rightBound + bottomBound + topBound + [(1,1)]
+			elesBound = [(1,1)] + rightBound +topBound
+			i, s1 = 0, len(rightBound)
 			for x0, y0 in elesBound:
 				l = array.bbox.left + array.periodX*x0
 				b = array.bbox.bottom + array.periodY*y0
-				r, t = l+array.periodX-1, b + array.periodY-1
-				idx = self.polygonTree.intersection((l, b, r, t))
-				instString = []
+				r, t = l+array.periodX, b + array.periodY
+				idx = list(self.polygonTree.intersection((l, b, r, t)))
+				instString, ov = [], []
 				box = db.Box()
-				for i in idx:
-					inst = self.polygonList[i]
+				for id in idx:
+					box0 = self.polygonList[id].bbox
+					if box0.area() > area or box0.left < l or box0.left >= r or \
+						box0.bottom < b or box0.top >= t:
+						ov.append(id)
+				for id in ov:
+					idx.remove(id)
+				for i, id in enumerate(idx):
+					inst = self.polygonList[id]
 					box0 = inst.bbox
-					if box0.left>=l and box0.left<=r and box0.bottom>=b and box0.top<=t:
-						if i == 0:
-							box = box0
-						else:
-							box = box + box0
-						c = box0.center()
-						instString.append((c.x, c.y, inst.pid, inst.tid, inst.symmetryType))
-				patternLib.encode(instString, box)
-			if patternLib.patternCount < 1:
-				keep.append(array)
+					if i == 0:
+						box = box0
+					else:
+						box = box + box0
+					c = box0.center()
+					instString.append((c.x, c.y, inst.pid, inst.tid, inst.symmetryType))
+				inst = patternLib.encode(instString, box)
+				if inst.pattern != patternLib.patternList[0]:
+					if i > s1:
+						boundsX.append(x0)
+					else:
+						boundsY.append(y0)
+				i += 1
+			if len(boundsX) > 1:
+				sizey -= 1
+			if len(boundsY) > 1:
+				sizex -= 1
+			array.bbox.right = array.bbox.left + array.periodX*sizex
+			array.bbox.top = array.bbox.bottom + array.periodY*sizey
+			keep.append(array)
 
 		self.arrayList = keep
 
@@ -276,7 +284,7 @@ class PArrayManager(object):
 		same. Attentionally, boundary elements are treated different."""
 		keep = []
 		for array in self.arrayList:
-			sizex, sizey = array.shape()
+			sizex, sizey = array.shape
 			edgex, edgey = sizex-2, sizey-2
 			x1, y1 = 0, 0
 			# elements inside
@@ -351,8 +359,8 @@ class PArrayManager(object):
 		self.arrayList = keep
 
 	def element_determine(self):
-		"""Element directly derived from projective feature periods might
-		not be the repetitive element. Therefore the elements with size of multiple
+		"""Element directly derived from projective feature periods might not be
+		the repetitive element. Therefore the elements with size of multiple
 		periods are checked and determined."""
 		candidates = [(1,1), (1,2), (2,1), (2,2), (1,3), (3,1), (2,3), (3,2), (3,3)]
 		keep = []
@@ -360,23 +368,32 @@ class PArrayManager(object):
 			px, py = array.periodX, array.periodY
 			for mx, my in candidates:
 				wx, wy = px*mx, py*my
+				area = wx*wy
 				l, b = array.bbox.left + wx, array.bbox.bottom + wy  # origin
-				idx1 = self.polygonTree.intersection((l, b, l+wx, b+wy))
-				idx2 = self.polygonTree.intersection((l, b+wy, l+wx, b+2*wy))
-				idx3 = self.polygonTree.intersection((l+wx, b, l+2*wx, b+wy))
+				idx1 = list(self.polygonTree.intersection((l, b, l+wx, b+wy)))
+				idx2 = list(self.polygonTree.intersection((l, b+wy, l+wx, b+2*wy)))
+				idx3 = list(self.polygonTree.intersection((l+wx, b, l+2*wx, b+wy)))
 				patternLib = PatternLib([], {}, 0)
 				for idx in [idx1, idx2, idx3]:
-					instString = []
+					instString, ov = [], []
 					box = db.Box()
-					for i in idx:
-						inst = self.polygonList[i]
+					for id in idx:
+						inst = self.polygonList[id]
+						if inst.bbox.area() > area:
+							ov.append(id)
+					for id in ov:
+						idx.remove(id)
+
+					for i, id in enumerate(idx):
+						inst = self.polygonList[id]
 						if i == 0:
-							box = inst.bbox
+							box = db.Box(inst.bbox)
 						else:
 							box = box + inst.bbox
 						center = inst.bbox.center()
 						instString.append((center.x, center.y, inst.pid, inst.tid, inst.symmetryType))
 					patternLib.encode(instString, box)
+
 				if patternLib.patternCount == 1:
 					array.periodX, array.periodY = wx, wy
 					array.bbox.right = l + math.floor(array.bbox.width()/wx)*wx
@@ -440,15 +457,14 @@ class PArrayManager(object):
 				return None
 
 	def proposals_to_arrays_sharing(self):
-		"""Begin with array proposals, scan regions of interest to
-		determine the exact bounding box and periods for corresponding regions
-		with sharing projective feature and periods."""
-		assert not self.__is_overlapping, 'Array proposals might overlap!'
+		"""Begin with array proposals, scan regions of interest to determine the
+		exact bounding box and periods for corresponding regions with sharing
+		projective feature and periods."""
 
 		# rtree for indexing
 		proposalTree = index.Index()
 		for i,proposal in enumerate(self.arrayList):
-			proposalTree.insert(i, proposal.coord_tuple())
+			proposalTree.insert(i, proposal.coord_tuple)
 
 		obsoletes = {}
 		classifiedX, classifiedY = {}, {}
@@ -478,7 +494,7 @@ class PArrayManager(object):
 					if ix in classifiedX:
 						continue
 					p = self.arrayList[ix]
-					pl, pb, pr, pt = p.coord_tuple()
+					pl, pb, pr, pt = p.coord_tuple
 					ppy = p.periodY
 					if (pb <= bottom) and (pt >= top) and (4*periody > ppy):
 						classifiedX[ix] = 0
@@ -513,7 +529,7 @@ class PArrayManager(object):
 					if ix in classifiedY:
 						continue
 					p = self.arrayList[ix]
-					pl, pb, pr, pt = p.coord_tuple()
+					pl, pb, pr, pt = p.coord_tuple
 					ppx = p.periodX
 					if (pl <= left) and (pr >= right) and (4*periodx > ppx):
 						classifiedY[ix] = 0
@@ -536,10 +552,12 @@ class PArrayManager(object):
 
 	def visualize(self):
 		"""Combine all arrays's bounding boxes and box of bottom left most element."""
-		regions = []
+		regions, area = [], 0
 		for array in self.arrayList:
+			area += array.bbox.area()
 			left, bottom = array.bbox.left, array.bbox.bottom
 			element = db.Box(left, bottom, left+array.periodX, bottom+array.periodY)
 			regions.extend([array.bbox, element])
 
+		print('Array area is {}, array count is {}.'.format(area, len(self.arrayList)))
 		return regions
